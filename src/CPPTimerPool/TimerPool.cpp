@@ -1,6 +1,6 @@
 /*
        Thread Safe Timer Pool Library
-           By Dean Camera, 2022.
+           By Dean Camera, 2023.
 
      dean [at] fourwalledcubicle [dot] com
           www.fourwalledcubicle.com
@@ -37,6 +37,13 @@
 
 #include <vector>
 
+#if defined(_WIN32)
+    #define NOMINMAX
+    #define WIN32_LEAN_AND_MEAN
+    #include <Windows.h>
+#elif defined(__linux__) || defined(__APPLE__)
+    #include <pthread.h>
+#endif
 
 namespace
 {
@@ -44,7 +51,7 @@ namespace
     // internally to the factory methods inside the TimerPool class.
     template <class BaseClass>
     class EnableConstructor final
-		: public BaseClass
+        : public BaseClass
     {
     public:
         template<typename... Args>
@@ -80,6 +87,17 @@ namespace
     private:
         const TimerPool::TimerHandle m_timer;
     };
+
+    void NameCurrentThread(const std::string& name)
+    {
+#if defined(_WIN32)
+        SetThreadDescription(GetCurrentThread(), std::wstring(name.begin(), name.end()).c_str());
+#elif defined(__linux__)
+        pthread_setname_np(pthread_self(), name.c_str());
+#elif defined(__APPLE__)
+        pthread_setname_np(name.c_str());
+#endif
+    }
 }
 
 
@@ -110,7 +128,7 @@ TimerPool::~TimerPool()
 void TimerPool::registerTimer(TimerHandle timer)
 {
     {
-        std::lock_guard<decltype(m_mutex)>      lock(m_mutex);
+        std::lock_guard<decltype(m_mutex)> lock(m_mutex);
 
         m_timers.remove(timer);
         m_timers.emplace_front(timer);
@@ -122,7 +140,7 @@ void TimerPool::registerTimer(TimerHandle timer)
 void TimerPool::unregisterTimer(TimerHandle timer)
 {
     {
-        std::lock_guard<decltype(m_mutex)>      lock(m_mutex);
+        std::lock_guard<decltype(m_mutex)> lock(m_mutex);
 
         m_timers.remove(timer);
     }
@@ -136,11 +154,20 @@ std::thread::native_handle_type TimerPool::get_running_thread(){
 
 void TimerPool::run()
 {
+    // Name the current timer pool thread, useful when using a debugger.
+    {
+        std::string threadName = "Timer Pool";
+        if (! m_name.empty())
+            threadName += " '" + m_name + "'";
+
+        NameCurrentThread(threadName);
+    }
+
     std::vector<TimerHandle> expiredTimers;
 
     while (m_running)
     {
-        std::unique_lock<decltype(m_mutex)>      lock(m_mutex);
+        std::unique_lock<decltype(m_mutex)> lock(m_mutex);
 
         const auto nowTime = Clock::now();
 
@@ -218,11 +245,11 @@ TimerPool::Timer::Timer(const PoolHandle& pool, const std::string& name)
 
 }
 
-void TimerPool::Timer::setCallback(Callback&& callback)
+void TimerPool::Timer::setCallback(Callback callback)
 {
     std::lock_guard<decltype(m_mutex)> lock(m_mutex);
 
-    m_callback = callback;
+    m_callback = std::move(callback);
 }
 
 void TimerPool::Timer::setInterval(std::chrono::milliseconds ms)
